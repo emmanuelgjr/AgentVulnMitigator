@@ -1,5 +1,5 @@
 # AgentVulnMitigator
-A multi-agent AI security tool to detect and mitigate vulnerabilities in Agentic AI systems, aligned with OWASP Top 10 for LLM Applications.
+A general-purpose multi-agent AI security tool to detect and mitigate vulnerabilities in Agentic AI systems
 
 ## Features
 - Detects vulnerabilities like prompt injection and data leakage.
