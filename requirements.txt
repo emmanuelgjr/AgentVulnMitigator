@@ -1,0 +1,7 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+jinja2==3.1.4
+pydantic==2.6.1
+rigging==1.3.0
+azure-identity==1.17.1
+azure-monitor-opentelemetry==1.0.0

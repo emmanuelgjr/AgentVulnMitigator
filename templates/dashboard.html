@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AgentVulnMitigator</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <h1>AgentVulnMitigator Dashboard</h1>
+    <form method="post" action="/analyze">
+        <label for="user_input">Enter AI Input:</label><br>
+        <textarea id="user_input" name="user_input" rows="4" cols="50">{{ user_input or '' }}</textarea><br>
+        <button type="submit">Analyze</button>
+    </form>
+
+    {% if vulnerabilities %}
+    <h2>Detected Vulnerabilities</h2>
+    <table>
+        <tr><th>Type</th><th>Description</th><th>Severity</th></tr>
+        {% for vuln in vulnerabilities %}
+        <tr><td>{{ vuln.type }}</td><td>{{ vuln.description }}</td><td>{{ vuln.severity }}</td></tr>
+        {% endfor %}
+    </table>
+    {% endif %}
+
+    {% if mitigations %}
+    <h2>Mitigation Actions</h2>
+    <table>
+        <tr><th>Vulnerability</th><th>Action</th><th>Status</th></tr>
+        {% for mit in mitigations %}
+        <tr><td>{{ mit.vulnerability_type }}</td><td>{{ mit.action }}</td><td>{{ mit.status }}</td></tr>
+        {% endfor %}
+    </table>
+    {% endif %}
+
+    <script src="/static/js/script.js"></script>
+</body>
+</html>
