@@ -1,5 +1,5 @@
 # AgentVulnMitigator
-A multi-agent AI security tool to detect and mitigate vulnerabilities in Agentic AI systems.
+A multi-agent AI security tool to detect and mitigate vulnerabilities in Agentic AI systems, aligned with OWASP Top 10 for LLM Applications.
 
 ## Features
 - Detects vulnerabilities like prompt injection and data leakage.
@@ -25,3 +25,6 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8002
+
+## Dashboard
+screenshots/dashboard.png
