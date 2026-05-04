@@ -85,7 +85,7 @@ _RULES: tuple[_Rule, ...] = (
     ),
     _Rule(
         type="Excessive Agency / SSRF",
-        severity="Medium",
+        severity="High",
         description="Agent tool-call targeting an internal/metadata endpoint.",
         pattern=re.compile(
             r"https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0|169\.254\.169\.254|metadata\.google\.internal)",
