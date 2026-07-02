@@ -100,3 +100,35 @@ def test_pull_request_scans_diff(client, monkeypatch):
     assert data["head_sha"] == "deadbeef"
     assert any(f["type"] == "Prompt Injection" for f in data["findings"])
     assert data["reported_to_github"] is False
+
+
+def test_pull_request_rejects_internal_diff_url(client):
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "diff_url": "http://169.254.169.254/latest/meta-data/",
+            "head": {"sha": "x"},
+        },
+        "repository": {"full_name": "owner/repo"},
+        "installation": {"id": 0},
+    }
+    body = json.dumps(payload).encode()
+    r = client.post(
+        "/github/webhook",
+        content=body,
+        headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": _sign(body)},
+    )
+    assert r.status_code == 400
+
+
+def test_webhook_rejects_tampered_body(client):
+    body = b'{"action":"opened"}'
+    r = client.post(
+        "/github/webhook",
+        content=body,
+        headers={
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sign(b'{"action":"different"}'),
+        },
+    )
+    assert r.status_code == 401

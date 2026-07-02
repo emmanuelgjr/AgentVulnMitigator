@@ -1,38 +1,18 @@
 """SSRF guard for HTTP tool calls."""
 from __future__ import annotations
 
-import ipaddress
 import socket
 from urllib.parse import urlparse
 
-_BLOCKED_HOSTNAMES = {
-    "metadata.google.internal",
-    "metadata",
-    "instance-data",
-}
-
-
-def _is_blocked_ip(ip: str) -> bool:
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return False
-    return (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_reserved
-        or addr.is_multicast
-        or addr.is_unspecified
-    )
+from ..core.netcheck import BLOCKED_HOSTNAMES, coerce_ip, is_internal_ip
 
 
 def validate_http_url(url: str, *, resolve_dns: bool = True) -> str | None:
     """Return None if `url` is safe, or a reason string if it should be blocked.
 
     Blocks: non-http(s) schemes, RFC1918 / loopback / link-local / metadata
-    hosts, and (when DNS resolution is allowed) hostnames that resolve to
-    blocked IPs.
+    hosts (including decimal-, hex-, and IPv6-encoded forms), and (when DNS
+    resolution is allowed) hostnames that resolve to blocked IPs.
     """
     if not isinstance(url, str) or not url.strip():
         return "empty url"
@@ -45,20 +25,19 @@ def validate_http_url(url: str, *, resolve_dns: bool = True) -> str | None:
     if not host:
         return "url has no host"
 
-    if host in _BLOCKED_HOSTNAMES:
+    if host.rstrip(".") in BLOCKED_HOSTNAMES:
         return f"hostname {host!r} is blocked (cloud metadata)"
 
-    if _is_blocked_ip(host):
-        return f"host {host!r} is in a blocked IP range"
-
-    if resolve_dns:
+    addr = coerce_ip(host)
+    if addr is not None:
+        if is_internal_ip(addr):
+            return f"host {host!r} is in a blocked IP range"
+    elif resolve_dns:
         try:
-            for family, _stype, _proto, _canon, sockaddr in socket.getaddrinfo(host, None):
-                ip = sockaddr[0]
-                if _is_blocked_ip(ip):
-                    return f"hostname {host!r} resolves to blocked IP {ip!r}"
-                if family == socket.AF_INET6 and ip == "::1":
-                    return f"hostname {host!r} resolves to loopback"
+            for _family, _stype, _proto, _canon, sockaddr in socket.getaddrinfo(host, None):
+                resolved = coerce_ip(sockaddr[0])
+                if resolved is not None and is_internal_ip(resolved):
+                    return f"hostname {host!r} resolves to blocked IP {sockaddr[0]!r}"
         except socket.gaierror:
             return f"hostname {host!r} could not be resolved"
 

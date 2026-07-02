@@ -21,6 +21,8 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 
+from agentvuln.validators.http import validate_http_url
+
 from .analyzer_agent import AnalyzerAgent, Vulnerability
 from .mitigation_agent import MitigationAgent
 
@@ -113,7 +115,18 @@ async def _handle_pull_request(payload: dict[str, Any]) -> dict[str, Any]:
     repo_full = payload["repository"]["full_name"]
     installation_id = (payload.get("installation") or {}).get("id")
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    # `diff_url` comes from the webhook body. Even though the request is
+    # signature-verified, the webhook secret is a shared org secret, so a
+    # malicious/compromised sender could point us at an internal or cloud-
+    # metadata endpoint (SSRF). Refuse loopback/link-local/RFC1918/metadata
+    # targets before fetching.
+    ssrf_reason = validate_http_url(diff_url, resolve_dns=False)
+    if ssrf_reason is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"refusing to fetch diff_url: {ssrf_reason}"
+        )
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
         diff_resp = await client.get(diff_url, headers={"Accept": "application/vnd.github.v3.diff"})
         diff_resp.raise_for_status()
         findings = _scan_diff(diff_resp.text)
@@ -199,8 +212,8 @@ async def github_webhook(request: Request) -> dict[str, Any]:
     event = request.headers.get("X-GitHub-Event", "")
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid JSON body")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid JSON body") from exc
 
     if event == "ping":
         return {"event": "ping", "ok": True}

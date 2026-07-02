@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Redaction fail-closed:** `Guard(mode="redact")` no longer returns the
+  original text while reporting `action="redact"`. Findings surfaced only via
+  normalization (base64/hex/rot13/zero-width/confusable/spacing) — whose match
+  has no literal span in the raw input — now fail closed to `BLOCK`. Redaction
+  is re-run over the raw text per triggered rule, so every occurrence and the
+  full match span are removed (previously only the first, 120-char-truncated
+  snippet was replaced), closing a secret-leak path.
+- **DoS bounds:** the detector/normalizer now cap input at 50 000 chars and the
+  SQL validator caps queries at 10 000 chars. The SQL `UPDATE/DELETE`-without-
+  `WHERE` check was rewritten from an O(n²) negative-lookahead to linear scans.
+  A ~10 MB input that previously stalled the guard for tens of seconds now
+  returns in milliseconds.
+- **SSRF hardening:** `validate_http_url` and the analyzer SSRF rule now share
+  `agentvuln.core.netcheck` and block decimal (`2130706433`), hex
+  (`0x7f000001`), octal (`0177.0.0.1`), short-form (`127.1`), trailing-dot
+  (`169.254.169.254.`), IPv6 (`[::1]`), and IPv4-mapped IPv6
+  (`::ffff:127.0.0.1`) internal/metadata targets. The GitHub webhook now
+  validates `diff_url` against these before fetching (blind-SSRF fix) and
+  disables redirect following.
+- **`protect(guard_inputs=...)`** now always scans string positional args
+  (previously skipped when `guard_inputs` was set), and redacts by position/key
+  rather than value-equality.
+- **LangChain `make_callback_handler`** is block-only (callbacks cannot mutate
+  I/O); it now raises on would-be redactions and warns when constructed with a
+  non-`block` guard instead of silently providing no protection.
+- **Vector metadata** injection check now uses the same High/Critical severity
+  gate as the content check.
+
+### Added
+- Detection coverage: modern secret formats (`sk-ant-`, `sk-proj-`, Stripe
+  `sk_live_`, Google `AIza`, GitLab `glpat-`, `github_pat_`, AWS `ASIA`, PEM
+  private-key blocks); Luhn-validated card detection with `. - _ /` separators;
+  system-prompt *exfiltration* phrasings (`reveal/print/repeat … system prompt`,
+  `… above … verbatim/starting with`); command-injection via single `|`/`&`,
+  newlines, and `cat`/`chmod`/`tee`/`dd`/`nc`/`python`/… gated on a command-
+  shaped argument to avoid prose false positives; unquoted event-handler and
+  `javascript:`/`data:` XSS vectors; and percent-, HTML-entity-, nested-, and
+  URL-safe-base64 decoding in the normalizer.
+
 ## [0.1.0] - 2026-05-03
 
 ### Added

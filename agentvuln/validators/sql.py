@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import re
 
+_MAX_QUERY_CHARS = 10_000
 _MULTI = re.compile(r";\s*\S")
 _COMMENT = re.compile(r"--|/\*|\*/|#")
 _DDL = re.compile(r"\b(?:DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b", re.IGNORECASE)
-_WRITE_NO_WHERE = re.compile(r"\b(?:UPDATE|DELETE)\b(?![^;]*\bWHERE\b)", re.IGNORECASE)
+_UPDATE_DELETE = re.compile(r"\b(?:UPDATE|DELETE)\b", re.IGNORECASE)
+_WHERE = re.compile(r"\bWHERE\b", re.IGNORECASE)
 _UNION = re.compile(r"\bUNION\b\s+(?:ALL\s+)?\bSELECT\b", re.IGNORECASE)
 
 
@@ -24,6 +26,9 @@ def validate_sql_query(
 ) -> str | None:
     if not isinstance(query, str) or not query.strip():
         return "empty query"
+
+    if len(query) > _MAX_QUERY_CHARS:
+        return f"query exceeds {_MAX_QUERY_CHARS}-char cap"
 
     stripped = query.strip().rstrip(";")
 
@@ -42,7 +47,10 @@ def validate_sql_query(
     if not allow_writes and re.search(r"\b(?:INSERT|UPDATE|DELETE|REPLACE|MERGE)\b", stripped, re.IGNORECASE):
         return "write statements are not allowed by policy"
 
-    if _WRITE_NO_WHERE.search(stripped):
+    # Multi-statement input is already rejected above, so this is effectively a
+    # single statement: an UPDATE/DELETE with no WHERE anywhere is unscoped.
+    # Two linear scans — no backtracking lookahead (avoids O(n^2) blowup).
+    if _UPDATE_DELETE.search(stripped) and not _WHERE.search(stripped):
         return "UPDATE/DELETE without a WHERE clause is not allowed"
 
     return None
