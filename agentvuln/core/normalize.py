@@ -10,8 +10,21 @@ from __future__ import annotations
 import base64
 import binascii
 import codecs
+import html
 import re
 import unicodedata
+from urllib.parse import unquote
+
+# Guard rails against normalization itself becoming a DoS vector: cap the
+# input we process and the size of any single token we attempt to decode.
+# The input length cap is the real DoS bound; the per-token cap only needs to
+# stay within it, so it is set to the input cap (a smaller value merely let an
+# attacker pad a payload past it to evade the decode layer).
+_MAX_NORMALIZE_CHARS = 50_000
+_MAX_DECODE_TOKEN = _MAX_NORMALIZE_CHARS
+# How many decode rounds to run so nested encodings (base64-of-base64,
+# base64-of-hex, ...) surface. Bounded to keep work linear.
+_DECODE_ROUNDS = 3
 
 _ZERO_WIDTH = dict.fromkeys(
     [
@@ -45,6 +58,9 @@ _CONFUSABLES: dict[int, str] = {
 }
 
 _BASE64_RE = re.compile(r"(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{16,}={0,2})(?![A-Za-z0-9+/])")
+# URL-safe base64 alphabet (- and _). Only tokens that actually contain - or _
+# are decoded here; plain base64 is handled by _BASE64_RE.
+_URLSAFE_B64_RE = re.compile(r"(?<![A-Za-z0-9_=-])([A-Za-z0-9_-]{16,}={0,2})(?![A-Za-z0-9_=-])")
 _HEX_RE = re.compile(r"\b((?:[0-9a-fA-F]{2}\s*){8,})\b")
 
 
@@ -61,6 +77,8 @@ def _decode_base64_blocks(text: str) -> str:
     decoded_parts: list[str] = []
     for match in _BASE64_RE.finditer(text):
         token = match.group(1)
+        if len(token) > _MAX_DECODE_TOKEN:
+            continue
         try:
             raw = base64.b64decode(token, validate=True)
         except (binascii.Error, ValueError):
@@ -74,9 +92,27 @@ def _decode_base64_blocks(text: str) -> str:
     return text + (" " + " ".join(decoded_parts) if decoded_parts else "")
 
 
+def _decode_urlsafe_base64_blocks(text: str) -> str:
+    decoded_parts: list[str] = []
+    for match in _URLSAFE_B64_RE.finditer(text):
+        token = match.group(1)
+        if ("-" not in token and "_" not in token) or len(token) > _MAX_DECODE_TOKEN:
+            continue  # plain base64 is handled by _decode_base64_blocks
+        try:
+            raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+            decoded = raw.decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            continue
+        if decoded.isprintable() or any(c.isspace() for c in decoded):
+            decoded_parts.append(decoded)
+    return text + (" " + " ".join(decoded_parts) if decoded_parts else "")
+
+
 def _decode_hex_blocks(text: str) -> str:
     decoded_parts: list[str] = []
     for match in _HEX_RE.finditer(text):
+        if len(match.group(1)) > _MAX_DECODE_TOKEN:
+            continue
         token = re.sub(r"\s+", "", match.group(1))
         if len(token) % 2:
             continue
@@ -88,6 +124,25 @@ def _decode_hex_blocks(text: str) -> str:
         if decoded.isprintable():
             decoded_parts.append(decoded)
     return text + (" " + " ".join(decoded_parts) if decoded_parts else "")
+
+
+def _decode_percent(text: str) -> str:
+    """Append the percent-decoded form (e.g. %69%67%6e%6f%72%65 -> ignore)."""
+    if "%" not in text:
+        return text
+    try:
+        decoded = unquote(text, errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return text
+    return text + (" " + decoded if decoded and decoded != text else "")
+
+
+def _decode_html_entities(text: str) -> str:
+    """Append the HTML-unescaped form (named + numeric/hex character refs)."""
+    if "&" not in text:
+        return text
+    decoded = html.unescape(text)
+    return text + (" " + decoded if decoded != text else "")
 
 
 def _try_rot13(text: str) -> str:
@@ -122,10 +177,22 @@ def normalize(text: str) -> str:
     """
     if not text:
         return text
+    if len(text) > _MAX_NORMALIZE_CHARS:
+        text = text[:_MAX_NORMALIZE_CHARS]
     out = _strip_zero_width(text)
     out = _fold_confusables(out)
-    out = _decode_base64_blocks(out)
-    out = _decode_hex_blocks(out)
+    # Iterate the transport-decoders so nested encodings (base64-of-base64,
+    # base64-of-percent, ...) surface. Bounded and short-circuited at a
+    # fixed point.
+    for _ in range(_DECODE_ROUNDS):
+        prev = out
+        out = _decode_base64_blocks(out)
+        out = _decode_urlsafe_base64_blocks(out)
+        out = _decode_hex_blocks(out)
+        out = _decode_percent(out)
+        out = _decode_html_entities(out)
+        if out == prev:
+            break
     out = _try_rot13(out)
     out = _collapse_spacing(out)
     return out

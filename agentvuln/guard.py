@@ -46,17 +46,6 @@ class Decision:
         }
 
 
-_REDACTION = "[REDACTED]"
-
-
-def _redact(text: str, findings: list[Vulnerability]) -> str:
-    out = text
-    for f in findings:
-        if f.snippet:
-            out = out.replace(f.snippet, _REDACTION)
-    return out
-
-
 @dataclass
 class Guard:
     """Runtime guardrail. Wrap LLM calls or pre-screen tool args.
@@ -95,37 +84,32 @@ class Guard:
     ) -> Any:
         """Run `fn(*args, **kwargs)` with input/output scanning.
 
-        By default every string positional arg and every string kwarg is
-        scanned. Pass `guard_inputs=("prompt",)` to restrict the input scan
-        to specific kwargs.
+        Every string positional arg is always scanned. By default every string
+        kwarg is scanned too; pass `guard_inputs=("prompt",)` to narrow the
+        *kwarg* scan to specific names (positional args are still scanned, so
+        malicious positional data can't slip past). Offending values are
+        replaced positionally/by-key, not by value-equality.
         """
-        if guard_inputs:
-            inputs = [kwargs[k] for k in guard_inputs if isinstance(kwargs.get(k), str)]
-        else:
-            inputs = [a for a in args if isinstance(a, str)] + [
-                v for v in kwargs.values() if isinstance(v, str)
-            ]
+        args_list = list(args)
+        # Collect (kind, ref) locators for every string input to scan.
+        targets: list[tuple[str, object]] = [
+            ("pos", i) for i, a in enumerate(args_list) if isinstance(a, str)
+        ]
+        kw_names = guard_inputs if guard_inputs else tuple(kwargs)
+        targets += [("kw", k) for k in kw_names if isinstance(kwargs.get(k), str)]
 
-        for value in inputs:
+        for kind, ref in targets:
+            value = args_list[ref] if kind == "pos" else kwargs[ref]
             decision = self.scan_input(value)
             if decision.action is Action.BLOCK:
                 raise GuardError("input blocked by Guard policy", decision.findings)
             if decision.action is Action.REDACT and decision.redacted is not None:
-                # Replace the offending value in-place.
-                if guard_inputs:
-                    for k in guard_inputs:
-                        if kwargs.get(k) == value:
-                            kwargs[k] = decision.redacted
+                if kind == "pos":
+                    args_list[ref] = decision.redacted
                 else:
-                    args = tuple(
-                        decision.redacted if a == value else a for a in args
-                    )
-                    kwargs = {
-                        k: (decision.redacted if v == value else v)
-                        for k, v in kwargs.items()
-                    }
+                    kwargs[ref] = decision.redacted
 
-        result = fn(*args, **kwargs)
+        result = fn(*args_list, **kwargs)
 
         if isinstance(result, str):
             out_decision = self.scan_output(result)
@@ -150,11 +134,21 @@ class Guard:
         if self.mode == "log_only":
             return Decision(action=Action.ALLOW, findings=findings, mitigations=mitigations)
         if self.mode == "redact":
+            # Redaction can only remove what is present in the raw text. A
+            # finding surfaced via normalization (base64/hex/rot13/zero-width/
+            # confusable/spacing) has no literal span in `text`, so we cannot
+            # mask it — fail closed to BLOCK rather than return a false
+            # "redacted" verdict that leaks the payload downstream.
+            if any(f.via_normalization for f in triggers):
+                return Decision(action=Action.BLOCK, findings=findings, mitigations=mitigations)
+            redacted = self._analyzer.redact(text, triggers)
+            if redacted == text:  # defensive: nothing removed -> fail closed
+                return Decision(action=Action.BLOCK, findings=findings, mitigations=mitigations)
             return Decision(
                 action=Action.REDACT,
                 findings=findings,
                 mitigations=mitigations,
-                redacted=_redact(text, findings),
+                redacted=redacted,
             )
         return Decision(action=Action.BLOCK, findings=findings, mitigations=mitigations)
 

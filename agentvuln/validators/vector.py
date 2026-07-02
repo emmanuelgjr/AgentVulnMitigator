@@ -37,7 +37,9 @@ def validate_vector_write(
 
     if metadata:
         for k, v in metadata.items():
-            if isinstance(v, str) and _analyzer.analyze_input(v):
+            if isinstance(v, str) and any(
+                x.severity in {"Critical", "High"} for x in _analyzer.analyze_input(v)
+            ):
                 return f"metadata field {k!r} contains injection markers"
 
     return None

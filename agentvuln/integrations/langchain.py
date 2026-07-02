@@ -13,6 +13,7 @@ Soft-imports LangChain so the rest of agentvuln runs without it.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any
 from uuid import UUID
 
@@ -78,9 +79,24 @@ def _callback_base() -> type:
 
 
 def make_callback_handler(guard: Guard | None = None) -> Any:
-    """Construct a LangChain callback handler that scans LLM I/O."""
+    """Construct a LangChain callback handler that scans LLM I/O.
+
+    LangChain callbacks are observers — they cannot mutate the prompt or
+    completion — so this handler is *block-only*. If the guard is configured
+    with ``mode='redact'`` it cannot redact here; to avoid silently forwarding
+    unsanitized content it treats a would-be REDACT as a BLOCK (raises) and
+    warns at construction. Use ``guard_runnable`` if you need redaction.
+    """
     base = _callback_base()
     g = guard or Guard()
+
+    if g.mode != "block":
+        warnings.warn(
+            f"GuardCallbackHandler cannot mutate LLM I/O, so Guard(mode={g.mode!r}) "
+            "is enforced as block: triggering findings raise GuardError instead of "
+            "being redacted/logged. Use guard_runnable() for redaction.",
+            stacklevel=2,
+        )
 
     class GuardCallbackHandler(base):  # type: ignore[misc, valid-type]
         def on_llm_start(  # type: ignore[override]
@@ -93,7 +109,7 @@ def make_callback_handler(guard: Guard | None = None) -> Any:
         ) -> None:
             for p in prompts:
                 decision = g.scan_input(p)
-                if decision.action is Action.BLOCK:
+                if decision.findings and decision.action in (Action.BLOCK, Action.REDACT):
                     raise GuardError("prompt blocked by Guard", decision.findings)
 
         def on_llm_end(self, response: Any, **kwargs: Any) -> None:  # type: ignore[override]
@@ -103,7 +119,7 @@ def make_callback_handler(guard: Guard | None = None) -> Any:
                     text = getattr(gen, "text", None)
                     if isinstance(text, str):
                         decision = g.scan_output(text)
-                        if decision.action is Action.BLOCK:
+                        if decision.findings and decision.action in (Action.BLOCK, Action.REDACT):
                             raise GuardError("LLM output blocked by Guard", decision.findings)
 
     return GuardCallbackHandler()
